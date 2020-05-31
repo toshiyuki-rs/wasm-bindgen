@@ -287,7 +287,7 @@ impl<'a> Context<'a> {
                 js.push_str(&format!("let {};\n(function() {{\n", global));
             }
             OutputMode::WebBundler => {
-                js.push_str("(function() {\n");
+                js.push_str("function createApi(wasm, __exports) {\n");
             }
             _ => {}
         }
@@ -372,9 +372,14 @@ impl<'a> Context<'a> {
                 footer.push_str("export default init;\n");
             }
             OutputMode::WebBundler => {
-                js.push_str("const __exports = {};\n");
                 init = self.gen_init(true, None)?;
-                footer.push_str("exports { Object.assign(init, __exports) as default };");
+                footer.push_str("\
+                async function startWasm(input) {{
+                    let wasm = await init(input);
+                    return createApi(wasm, wasm);
+                }}
+                exports {{ startWasm as default }};
+                ");   
             }
         }
 
@@ -395,7 +400,10 @@ impl<'a> Context<'a> {
         // Emit all our exports from this module
         js.push_str(&self.globals);
         js.push_str("\n");
-
+        if let OutputMode::WebBundler = self.config.mode {
+            js.push_str("return __exports;\n");     
+            js.push_str("};\n");
+        }
         // Generate the initialization glue, if there was any
         js.push_str(&init_js);
         js.push_str("\n");
