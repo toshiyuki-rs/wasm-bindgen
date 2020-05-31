@@ -99,6 +99,7 @@ fn rmain(args: &Args) -> Result<(), Error> {
             "web" => b.web(true)?,
             "no-modules" => b.no_modules(true)?,
             "nodejs" => b.nodejs(true)?,
+            "web-bundler" => b.web_bundler(true)?,
             s => bail!("invalid encode-into mode: `{}`", s),
         };
     }

@@ -201,7 +201,7 @@ impl Bindgen {
         }
         Ok(self)
     }
-    pub fn web_bundle(&mut self, web_bundler: bool) -> Result<&mut Bindgen, Error> {
+    pub fn web_bundler(&mut self, web_bundler: bool) -> Result<&mut Bindgen, Error> {
         if web_bundler {
             self.switch_mode(OutputMode::WebBundler, "--target web-bundler")?; 
         }
