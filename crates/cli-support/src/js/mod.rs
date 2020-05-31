@@ -132,7 +132,8 @@ impl<'a> Context<'a> {
                     format!("module.exports.{} = {};\n", export_name, contents)
                 }
             }
-            OutputMode::NoModules { .. } => {
+            OutputMode::NoModules { .. }
+            | OutputMode::WebBundler => {
                 if contents.starts_with("class") {
                     format!("{}\n__exports.{1} = {1};\n", contents, export_name)
                 } else {
@@ -281,8 +282,14 @@ impl<'a> Context<'a> {
         let mut js = String::new();
         let mut start = None;
 
-        if let OutputMode::NoModules { global } = &self.config.mode {
-            js.push_str(&format!("let {};\n(function() {{\n", global));
+        match &self.config.mode {
+            OutputMode::NoModules { global } =>  {
+                js.push_str(&format!("let {};\n(function() {{\n", global));
+            }
+            OutputMode::WebBundler => {
+                js.push_str("(function() {\n");
+            }
+            _ => {}
         }
 
         // Depending on the output mode, generate necessary glue to actually
@@ -355,7 +362,6 @@ impl<'a> Context<'a> {
                     start = Some("\nwasm.__wbindgen_start();\n".to_string());
                 }
             }
-
             // With a browser-native output we're generating an ES module, but
             // browsers don't support natively importing wasm right now so we
             // expose the same initialization function as `--target no-modules`
@@ -364,6 +370,11 @@ impl<'a> Context<'a> {
                 self.imports_post.push_str("let wasm;\n");
                 init = self.gen_init(needs_manual_start, Some(&mut imports))?;
                 footer.push_str("export default init;\n");
+            }
+            OutputMode::WebBundler => {
+                js.push_str("const __exports = {};\n");
+                init = self.gen_init(true, None)?;
+                footer.push_str("exports { Object.assign(init, __exports) as default };");
             }
         }
 
@@ -440,6 +451,7 @@ impl<'a> Context<'a> {
             }
 
             OutputMode::Bundler { .. }
+            | OutputMode::WebBundler
             | OutputMode::Node {
                 experimental_modules: true,
             }
@@ -542,7 +554,8 @@ impl<'a> Context<'a> {
                         input = import.meta.url.replace(/\\.js$/, '_bg.wasm');
                     }"
             }
-            OutputMode::NoModules { .. } => {
+            OutputMode::NoModules { .. }
+            | OutputMode::WebBundler => {
                 "\
                     if (typeof input === 'undefined') {
                         let src;

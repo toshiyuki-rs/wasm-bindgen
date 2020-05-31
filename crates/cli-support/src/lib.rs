@@ -74,6 +74,7 @@ enum OutputMode {
     Web,
     NoModules { global: String },
     Node { experimental_modules: bool },
+    WebBundler
 }
 
 enum Input {
@@ -136,7 +137,8 @@ impl Bindgen {
 
     fn switch_mode(&mut self, mode: OutputMode, flag: &str) -> Result<(), Error> {
         match self.mode {
-            OutputMode::Bundler { .. } => self.mode = mode,
+            OutputMode::Bundler { .. }
+            | OutputMode::WebBundler { .. } => self.mode = mode,
             _ => bail!(
                 "cannot specify `{}` with another output mode already specified",
                 flag
@@ -199,7 +201,12 @@ impl Bindgen {
         }
         Ok(self)
     }
-
+    pub fn web_bundle(&mut self, web_bundler: bool) -> Result<&mut Bindgen, Error> {
+        if web_bundler {
+            self.switch_mode(OutputMode::WebBundler, "--target web-bundler")?; 
+        }
+        Ok(self)
+    }
     pub fn browser(&mut self, browser: bool) -> Result<&mut Bindgen, Error> {
         if browser {
             match &mut self.mode {
@@ -217,6 +224,7 @@ impl Bindgen {
         }
         Ok(self)
     }
+
 
     pub fn debug(&mut self, debug: bool) -> &mut Bindgen {
         self.debug = debug;
@@ -549,7 +557,8 @@ impl OutputMode {
 
     fn no_modules(&self) -> bool {
         match self {
-            OutputMode::NoModules { .. } => true,
+            OutputMode::NoModules { .. }
+            | OutputMode::WebBundler => true,
             _ => false,
         }
     }
@@ -559,6 +568,7 @@ impl OutputMode {
             OutputMode::Web => true,
             OutputMode::NoModules { .. } => true,
             OutputMode::Bundler { browser_only } => *browser_only,
+            OutputMode::WebBundler => true,
             _ => false,
         }
     }
