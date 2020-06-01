@@ -374,11 +374,11 @@ impl<'a> Context<'a> {
             OutputMode::WebBundler => {
                 init = self.gen_init(true, None)?;
                 footer.push_str("\
-                async function startWasm(input) {{
+                async function startWasm(input) {
                     let wasm = await init(input);
-                    return createApi(wasm, wasm);
-                }}
-                exports {{ startWasm as default }};
+                    return createApi(wasm, { wasm: wasm });
+                }
+                exports { startWasm as default, startWasm as init };
                 ");   
             }
         }
