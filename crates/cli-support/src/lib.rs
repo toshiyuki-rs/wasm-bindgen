@@ -557,7 +557,8 @@ impl OutputMode {
 
     fn no_modules(&self) -> bool {
         match self {
-            OutputMode::NoModules { .. } => true,
+            OutputMode::NoModules { .. }
+            | OutputMode::WebBundler => true,
             _ => false,
         }
     }
