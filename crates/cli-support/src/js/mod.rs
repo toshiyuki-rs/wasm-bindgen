@@ -378,7 +378,7 @@ impl<'a> Context<'a> {
                     let wasm = await init(input);
                     return createApi(wasm, { wasm: wasm });
                 }
-                exports { startWasm as default, startWasm as init };
+                module.exports.init = startWasm;
                 ");   
             }
         }
