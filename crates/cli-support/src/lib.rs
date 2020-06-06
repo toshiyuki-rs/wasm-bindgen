@@ -534,7 +534,7 @@ impl OutputMode {
             | OutputMode::Web
             | OutputMode::Node {
                 experimental_modules: true,
-            } => true,
+            } | OutputMode::WebBundler => true,
             _ => false,
         }
     }
@@ -550,7 +550,8 @@ impl OutputMode {
 
     fn nodejs(&self) -> bool {
         match self {
-            OutputMode::Node { .. } => true,
+            OutputMode::Node { .. }
+            | OutputMode::WebBundler => true,
             _ => false,
         }
     }
