@@ -285,10 +285,7 @@ impl<'a> Context<'a> {
         match &self.config.mode {
             OutputMode::NoModules { global } =>  {
                 js.push_str(&format!("let {};\n(function() {{\n", global));
-            }
-            OutputMode::WebBundler => {
-                js.push_str("function createApi(wasm, __exports) {\n");
-            }
+            },
             _ => {}
         }
 
@@ -372,11 +369,18 @@ impl<'a> Context<'a> {
                 footer.push_str("export default init;\n");
             }
             OutputMode::WebBundler => {
+                js.push_str("function createApi(__exports) {\n");
+                js.push_str("let wasm;\n");
                 init = self.gen_init(needs_manual_start, None)?;
+                footer.push_str("__exports.init = init;\n");
+                footer.push_str("return __exports;\n");     
+                footer.push_str("};\n");
                 footer.push_str("\
                 async function startWasm(input) {
-                    let wasm = await init(input);
-                    return createApi(wasm, { wasm: wasm });
+                    const expMod = createApi({ });
+                    let wasm = await expMod.init(input);
+                    expMod.wasm = wasm;
+                    return expMod;
                 }
                 module.exports.init = startWasm;
                 module.exports.default = module.exports.init;
@@ -401,12 +405,10 @@ impl<'a> Context<'a> {
         // Emit all our exports from this module
         js.push_str(&self.globals);
         js.push_str("\n");
-        if let OutputMode::WebBundler = self.config.mode {
-            js.push_str("return __exports;\n");     
-            js.push_str("};\n");
-        }
+
         // Generate the initialization glue, if there was any
         js.push_str(&init_js);
+
         js.push_str("\n");
         js.push_str(&footer);
         js.push_str("\n");
