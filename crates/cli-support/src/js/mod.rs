@@ -372,7 +372,7 @@ impl<'a> Context<'a> {
                 footer.push_str("export default init;\n");
             }
             OutputMode::WebBundler => {
-                init = self.gen_init(true, None)?;
+                init = self.gen_init(needs_manual_start, None)?;
                 footer.push_str("\
                 async function startWasm(input) {
                     let wasm = await init(input);
