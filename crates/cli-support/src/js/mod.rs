@@ -379,6 +379,7 @@ impl<'a> Context<'a> {
                     return createApi(wasm, { wasm: wasm });
                 }
                 module.exports.init = startWasm;
+                module.exports.default = module.exports.init;
                 ");   
             }
         }
