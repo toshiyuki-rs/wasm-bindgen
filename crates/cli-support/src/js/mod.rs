@@ -19,6 +19,7 @@ pub struct Context<'a> {
     globals: String,
     imports_post: String,
     typescript: String,
+    typescript_exports: String,
     exposed_globals: Option<HashSet<Cow<'static, str>>>,
     next_export_idx: usize,
     config: &'a Bindgen,
@@ -86,6 +87,7 @@ impl<'a> Context<'a> {
             globals: String::new(),
             imports_post: String::new(),
             typescript: "/* tslint:disable */\n/* eslint-disable */\n".to_string(),
+            typescript_exports: String::new(),
             exposed_globals: Some(Default::default()),
             imported_names: Default::default(),
             js_imports: Default::default(),
@@ -301,7 +303,7 @@ impl<'a> Context<'a> {
             OutputMode::NoModules { global } => {
                 js.push_str("const __exports = {};\n");
                 js.push_str("let wasm;\n");
-                init = self.gen_init(needs_manual_start, None)?;
+                init = self.gen_init(needs_manual_start, None, None)?;
                 footer.push_str(&format!("{} = Object.assign(init, __exports);\n", global));
             }
 
@@ -365,13 +367,18 @@ impl<'a> Context<'a> {
             // as the default export of the module.
             OutputMode::Web => {
                 self.imports_post.push_str("let wasm;\n");
-                init = self.gen_init(needs_manual_start, Some(&mut imports))?;
+                init = self.gen_init(needs_manual_start, Some(&mut imports), None)?;
                 footer.push_str("export default init;\n");
             }
             OutputMode::WebBundler => {
                 js.push_str("function createApi(__exports) {\n");
                 js.push_str("let wasm;\n");
-                init = self.gen_init(needs_manual_start, None)?;
+                {
+                    let ts_exp =self.typescript_exports.clone();
+                    init = self.gen_init(
+                        needs_manual_start, None,
+                        Some(&ts_exp))?;
+                }
                 footer.push_str("__exports.init = init;\n");
                 footer.push_str("return __exports;\n");     
                 footer.push_str("};\n");
@@ -492,9 +499,12 @@ impl<'a> Context<'a> {
         &self,
         has_memory: bool,
         has_module_or_path_optional: bool,
+        interface_contents: Option<&str>
     ) -> Result<String, Error> {
-        let output = crate::wasm2es6js::interface(&self.module)?;
-
+        let output = match interface_contents {
+            Some(contents) => contents.to_string(),
+            None => crate::wasm2es6js::interface(&self.module)?
+        };
         let (memory_doc, memory_param) = if has_memory {
             (
                 "* @param {WebAssembly.Memory} maybe_memory\n",
@@ -532,6 +542,7 @@ impl<'a> Context<'a> {
         &mut self,
         needs_manual_start: bool,
         mut imports: Option<&mut String>,
+        interface_contents: Option<&str>,
     ) -> Result<(String, String), Error> {
         let module_name = "wbg";
         let mut init_memory_arg = "";
@@ -581,7 +592,7 @@ impl<'a> Context<'a> {
             _ => "",
         };
 
-        let ts = self.ts_for_init_fn(has_memory, !default_module_path.is_empty())?;
+        let ts = self.ts_for_init_fn(has_memory, !default_module_path.is_empty(), interface_contents)?;
 
         // Initialize the `imports` object for all import definitions that we're
         // directed to wire up.
@@ -2104,6 +2115,8 @@ impl<'a> Context<'a> {
 
     pub fn generate(&mut self) -> Result<(), Error> {
         self.prestore_global_import_identifiers()?;
+        let mut ts_0 = self.typescript.clone();
+        self.typescript = String::new();
         for (id, adapter) in crate::sorted_iter(&self.wit.adapters) {
             let instrs = match &adapter.kind {
                 AdapterKind::Import { .. } => continue,
@@ -2111,6 +2124,12 @@ impl<'a> Context<'a> {
             };
             self.generate_adapter(*id, adapter, instrs)?;
         }
+        let ts_1 = self.typescript.clone();
+        match self.config.mode {
+            OutputMode::WebBundler => {},
+            _ => ts_0 += &ts_1
+        }
+        self.typescript = ts_0;
 
         let mut pairs = self.aux.export_map.iter().collect::<Vec<_>>();
         pairs.sort_by_key(|(k, _)| *k);
@@ -2126,6 +2145,9 @@ impl<'a> Context<'a> {
 
         self.typescript.push_str(&self.aux.extra_typescript);
 
+        if let OutputMode::WebBundler = self.config.mode  {
+            self.typescript_exports = ts_1;  
+        }
         for path in self.aux.package_jsons.iter() {
             self.process_package_json(path)?;
         }
@@ -2264,7 +2286,9 @@ impl<'a> Context<'a> {
                     AuxExportKind::Function(name) => {
                         if let Some(ts_sig) = ts_sig {
                             self.typescript.push_str(&docs);
-                            self.typescript.push_str("export function ");
+                            if self.config.mode.is_export_as_typescript_interface() {
+                                self.typescript.push_str("export function ");
+                            }
                             self.typescript.push_str(&name);
                             self.typescript.push_str(ts_sig);
                             self.typescript.push_str(";\n");
@@ -3316,6 +3340,15 @@ fn require_class<'a>(
         .expect("classes already written")
         .entry(name.to_string())
         .or_insert_with(ExportedClass::default)
+}
+
+impl OutputMode {
+    fn is_export_as_typescript_interface(&self) -> bool {
+        match self { 
+            OutputMode::WebBundler => false,
+            _ => true 
+        }
+    }
 }
 
 impl ExportedClass {
