@@ -183,13 +183,13 @@ impl<'a> Context<'a> {
             // Finally we store all this metadata in the import map which we've
             // learned so when a binding for the import is generated we can
             // generate all the appropriate shims.
-            for (id, descriptor) in closure_imports {
+            for (id, descriptor) in crate::sorted_iter(&closure_imports) {
                 let signature = Function {
                     shim_idx: 0,
                     arguments: vec![Descriptor::I32; 3],
                     ret: Descriptor::Externref,
                 };
-                let id = self.import_adapter(id, signature, AdapterJsImportKind::Normal)?;
+                let id = self.import_adapter(*id, signature, AdapterJsImportKind::Normal)?;
                 // Synthesize the two integer pointers we pass through which
                 // aren't present in the signature but are present in the wasm
                 // signature.
@@ -1292,8 +1292,23 @@ impl<'a> Context<'a> {
         // everything into the outgoing arguments.
         let mut instructions = Vec::new();
         if uses_retptr {
+            let size = ret.input.iter().fold(0, |sum, ty| {
+                let size = match ty {
+                    AdapterType::I32 => 4,
+                    AdapterType::I64 => 8,
+                    AdapterType::F32 => 4,
+                    AdapterType::F64 => 8,
+                    _ => panic!("unsupported type in retptr {:?}", ty),
+                };
+                let sum_rounded_up = (sum + (size - 1)) & (!(size - 1));
+                sum_rounded_up + size
+            });
+            // Round the number of bytes up to a 16-byte alignment to ensure the
+            // stack pointer is always 16-byte aligned (which LLVM currently
+            // requires).
+            let size = (size + 15) & (!15);
             instructions.push(InstructionData {
-                instr: Instruction::Retptr,
+                instr: Instruction::Retptr { size },
                 stack_change: StackChange::Modified {
                     pushed: 1,
                     popped: 0,

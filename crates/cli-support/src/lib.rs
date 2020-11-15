@@ -74,7 +74,8 @@ enum OutputMode {
     Web,
     NoModules { global: String },
     Node { experimental_modules: bool },
-    WebBundler
+    WebBundler,
+    Deno,
 }
 
 enum Input {
@@ -125,6 +126,16 @@ impl Bindgen {
 
     pub fn out_name(&mut self, name: &str) -> &mut Bindgen {
         self.out_name = Some(name.to_string());
+        self
+    }
+
+    pub fn weak_refs(&mut self, enable: bool) -> &mut Bindgen {
+        self.weak_refs = enable;
+        self
+    }
+
+    pub fn reference_types(&mut self, enable: bool) -> &mut Bindgen {
+        self.externref = enable;
         self
     }
 
@@ -213,6 +224,14 @@ impl Bindgen {
                 OutputMode::Bundler { browser_only } => *browser_only = true,
                 _ => bail!("cannot specify `--browser` with other output types"),
             }
+        }
+        Ok(self)
+    }
+
+    pub fn deno(&mut self, deno: bool) -> Result<&mut Bindgen, Error> {
+        if deno {
+            self.switch_mode(OutputMode::Deno, "--target deno")?;
+            self.encode_into(EncodeInto::Always);
         }
         Ok(self)
     }
@@ -308,23 +327,6 @@ impl Bindgen {
                 (module, stem)
             }
         };
-
-        // This isn't the hardest thing in the world too support but we
-        // basically don't know how to rationalize #[wasm_bindgen(start)] and
-        // the actual `start` function if present. Figure this out later if it
-        // comes up, but otherwise we should continue to be compatible with
-        // LLVM's output today.
-        //
-        // Note that start function handling in `js/mod.rs` will need to be
-        // updated as well, because `#[wasm_bindgen(start)]` is inserted *after*
-        // a module's start function, if any, because we assume start functions
-        // only show up when injected on behalf of wasm-bindgen's passes.
-        if module.start.is_some() {
-            bail!(
-                "wasm-bindgen is currently incompatible with modules that \
-                 already have a start function"
-            );
-        }
 
         self.threads
             .run(&mut module)
@@ -534,7 +536,8 @@ impl OutputMode {
             | OutputMode::Web
             | OutputMode::Node {
                 experimental_modules: true,
-            } => true,
+            }
+            | OutputMode::Deno => true,
             _ => false,
         }
     }
@@ -717,7 +720,7 @@ impl Output {
         }
 
         if gen.typescript {
-            let ts_path = wasm_path.with_extension("d.ts");
+            let ts_path = wasm_path.with_extension("wasm.d.ts");
             let ts = wasm2es6js::typescript(&self.module)?;
             fs::write(&ts_path, ts)
                 .with_context(|| format!("failed to write `{}`", ts_path.display()))?;

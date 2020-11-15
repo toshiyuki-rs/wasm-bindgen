@@ -48,6 +48,17 @@ jobs:
       #   displayName: "(anyref) Crate test suite (no debug)"
       # - script: cargo test --target wasm32-unknown-unknown --features serde-serialize --test wasm
       #   displayName: "(anyref) Crate test suite (with serde)"
+      - script: |
+          set -e
+          echo "##vso[task.setvariable variable=NODE_ARGS]--harmony-weak-refs"
+          echo "##vso[task.setvariable variable=WASM_BINDGEN_WEAKREF]1"
+        displayName: "Configure anyref passes"
+      - script: cargo test --target wasm32-unknown-unknown --test wasm
+        displayName: "(weakref) Crate test suite"
+      - script: WASM_BINDGEN_NO_DEBUG=1 cargo test --target wasm32-unknown-unknown --test wasm
+        displayName: "(weakref) Crate test suite (no debug)"
+      - script: cargo test --target wasm32-unknown-unknown --features serde-serialize --test wasm
+        displayName: "(weakref) Crate test suite (with serde)"
 
   - job: test_wasm_bindgen_windows
     displayName: "Run wasm-bindgen crate tests (Windows)"
@@ -88,7 +99,7 @@ jobs:
         displayName: "install wasm target"
       - task: NodeTool@0
         inputs:
-          versionSpec: '>=13.0'
+          versionSpec: '>=15.0'
       - script: cargo test -p wasm-bindgen-cli-support
         displayName: "wasm-bindgen-cli-support tests"
       - script: cargo test -p wasm-bindgen-cli
@@ -167,7 +178,7 @@ jobs:
       - script: mv _package.json package.json && npm install && rm package.json
         displayName: "run npm install"
       - script: |
-          for dir in `ls examples | grep -v README | grep -v asm.js | grep -v raytrace | grep -v without-a-bundler | grep -v websockets | grep -v webxr`; do
+          for dir in `ls examples | grep -v README | grep -v asm.js | grep -v raytrace | grep -v without-a-bundler | grep -v websockets | grep -v webxr | grep -v deno`; do
             (cd examples/$dir &&
             ln -fs ../../node_modules . &&
             npm run build -- --output-path $BUILD_ARTIFACTSTAGINGDIRECTORY/exbuild/$dir) || exit 1;
@@ -178,12 +189,22 @@ jobs:
           artifactName: examples1
           targetPath: '$(Build.ArtifactStagingDirectory)'
 
+  - job: test_deno
+    displayName: "Build and test the deno example"
+    steps:
+      - template: ci/azure-install-rust.yml
+      - script: rustup target add wasm32-unknown-unknown
+        displayName: "install wasm target"
+      - template: ci/azure-install-deno.yml
+      - script: cd examples/deno && ./build.sh && $HOME/.deno/bin/deno run --allow-read test.ts
+        displayName: "build and run deno example"
+
   - job: build_raytrace
     displayName: "Build raytrace examples"
     steps:
       - template: ci/azure-install-rust.yml
         parameters:
-          toolchain: nightly-2020-01-06
+          toolchain: nightly-2020-08-27
       - script: rustup component add rust-src
         displayName: "install rust-src"
       - script: |
@@ -201,11 +222,12 @@ jobs:
     displayName: "Build benchmarks"
     steps:
       - template: ci/azure-install-rust.yml
-      - template: ci/azure-install-wasm-pack.yml
-      - script: wasm-pack build --target web benchmarks
+      - script: rustup target add wasm32-unknown-unknown
+        displayName: "add target"
+      - script: cargo build --manifest-path benchmarks/Cargo.toml --release --target wasm32-unknown-unknown
         displayName: "build benchmarks"
-      - script: rm -f benchmarks/pkg/.gitignore
-        displayName: "remove stray gitignore"
+      - script: cargo run -p wasm-bindgen-cli target/wasm32-unknown-unknown/release/wasm_bindgen_benchmark.wasm --out-dir benchmarks/pkg --target web
+        displayName: "run wasm-bindgen"
       - task: PublishPipelineArtifact@0
         inputs:
           artifactName: benchmarks

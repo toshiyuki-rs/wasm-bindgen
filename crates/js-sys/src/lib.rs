@@ -778,6 +778,7 @@ extern "C" {
     /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Boolean)
     #[wasm_bindgen(constructor)]
     #[deprecated(note = "recommended to use `Boolean::from` instead")]
+    #[allow(deprecated)]
     pub fn new(value: &JsValue) -> Boolean;
 
     /// The `valueOf()` method returns the primitive value of a `Boolean` object.
@@ -1299,7 +1300,14 @@ extern "C" {
 
     /// The `forEach()` method executes a provided function once per each
     /// key/value pair in the Map object, in insertion order.
-    ///
+    /// Note that in Javascript land the `Key` and `Value` are reversed compared to normal expectations:
+    /// # Examples
+    /// ```
+    /// let js_map = Map::new();
+    /// js_map.for_each(&mut |value, key| {
+    ///     // Do something here...
+    /// })
+    /// ```
     /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Map/forEach)
     #[wasm_bindgen(method, js_name = forEach)]
     pub fn for_each(this: &Map, callback: &mut dyn FnMut(JsValue, JsValue));
@@ -1843,6 +1851,7 @@ extern "C" {
     /// [MDN documentation](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Number)
     #[wasm_bindgen(constructor)]
     #[deprecated(note = "recommended to use `Number::from` instead")]
+    #[allow(deprecated)]
     pub fn new(value: &JsValue) -> Number;
 
     /// The `Number.parseInt()` method parses a string argument and returns an
@@ -4794,7 +4803,7 @@ macro_rules! arrays {
 
             /// The
             #[doc = $ctor]
-            /// constructor creates an array of unsigned 8-bit integers.
+            /// constructor creates a new array.
             ///
             /// [MDN documentation](
             #[doc = $mdn]

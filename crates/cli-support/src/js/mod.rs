@@ -146,7 +146,8 @@ impl<'a> Context<'a> {
             | OutputMode::Node {
                 experimental_modules: true,
             }
-            | OutputMode::Web => {
+            | OutputMode::Web
+            | OutputMode::Deno => {
                 if contents.starts_with("function") {
                     let body = &contents[8..];
                     if export_name == definition_name {
@@ -272,6 +273,63 @@ impl<'a> Context<'a> {
         reset_indentation(&shim)
     }
 
+    // generates somthing like
+    // ```js
+    // import * as import0 from './snippets/.../inline1.js';
+    // ```,
+    //
+    // ```js
+    // const imports = {
+    //   __wbindgen_placeholder__: {
+    //     __wbindgen_throw: function(..) { .. },
+    //     ..
+    //   },
+    //   './snippets/deno-65e2634a84cc3c14/inline1.js': import0,
+    // }
+    // ```
+    fn generate_deno_imports(&self) -> (String, String) {
+        let mut imports = String::new();
+        let mut wasm_import_object = "const imports = {\n".to_string();
+
+        wasm_import_object.push_str(&format!("  {}: {{\n", crate::PLACEHOLDER_MODULE));
+
+        for (id, js) in crate::sorted_iter(&self.wasm_import_definitions) {
+            let import = self.module.imports.get(*id);
+            wasm_import_object.push_str(&format!("{}: {},\n", &import.name, js.trim()));
+        }
+
+        wasm_import_object.push_str("\t},\n");
+
+        // e.g. snippets without parameters
+        let import_modules = self
+            .module
+            .imports
+            .iter()
+            .map(|import| &import.module)
+            .filter(|module| module.as_str() != PLACEHOLDER_MODULE);
+        for (i, module) in import_modules.enumerate() {
+            imports.push_str(&format!("import * as import{} from '{}'\n", i, module));
+            wasm_import_object.push_str(&format!("  '{}': import{},", module, i))
+        }
+
+        wasm_import_object.push_str("\n};\n\n");
+
+        (imports, wasm_import_object)
+    }
+
+    fn generate_deno_wasm_loading(&self, module_name: &str) -> String {
+        // Deno removed support for .wasm imports in https://github.com/denoland/deno/pull/5135
+        // the issue for bringing it back is https://github.com/denoland/deno/issues/5609.
+        format!(
+            "const file = new URL(import.meta.url).pathname;
+            const wasmFile = file.substring(0, file.lastIndexOf(Deno.build.os === 'windows' ? '\\\\' : '/') + 1) + '{}_bg.wasm';
+            const wasmModule = new WebAssembly.Module(Deno.readFileSync(wasmFile));
+            const wasmInstance = new WebAssembly.Instance(wasmModule, imports);
+            const wasm = wasmInstance.exports;",
+            module_name
+        )
+    }
+
     /// Performs the task of actually generating the final JS module, be it
     /// `--target no-modules`, `--target web`, or for bundlers. This is the very
     /// last step performed in `finalize`.
@@ -331,6 +389,18 @@ impl<'a> Context<'a> {
                         module_name
                     ))),
                 );
+
+                if needs_manual_start {
+                    footer.push_str("wasm.__wbindgen_start();\n");
+                }
+            }
+
+            OutputMode::Deno => {
+                let (js_imports, wasm_import_object) = self.generate_deno_imports();
+                imports.push_str(&js_imports);
+                footer.push_str(&wasm_import_object);
+
+                footer.push_str(&self.generate_deno_wasm_loading(module_name));
 
                 if needs_manual_start {
                     footer.push_str("wasm.__wbindgen_start();\n");
@@ -473,7 +543,8 @@ impl<'a> Context<'a> {
             | OutputMode::Node {
                 experimental_modules: true,
             }
-            | OutputMode::Web => {
+            | OutputMode::Web
+            | OutputMode::Deno => {
                 for (module, items) in crate::sorted_iter(&self.js_imports) {
                     imports.push_str("import { ");
                     for (i, (item, rename)) in items.iter().enumerate() {
@@ -745,7 +816,7 @@ impl<'a> Context<'a> {
                 ",
                 name,
                 if self.config.weak_refs {
-                    format!("{}FinalizationGroup.register(obj, obj.ptr, obj.ptr);", name)
+                    format!("{}Finalization.register(obj, obj.ptr, obj);", name)
                 } else {
                     String::new()
                 },
@@ -754,13 +825,7 @@ impl<'a> Context<'a> {
 
         if self.config.weak_refs {
             self.global(&format!(
-                "
-                const {}FinalizationGroup = new FinalizationGroup((items) => {{
-                    for (const ptr of items) {{
-                        wasm.{}(ptr);
-                    }}
-                }});
-                ",
+                "const {}Finalization = new FinalizationRegistry(ptr => wasm.{}(ptr));",
                 name,
                 wasm_bindgen_shared::free_function(&name),
             ));
@@ -824,7 +889,7 @@ impl<'a> Context<'a> {
             }}
             ",
             if self.config.weak_refs {
-                format!("{}FinalizationGroup.unregister(ptr);", name)
+                format!("{}Finalization.unregister(this);", name)
             } else {
                 String::new()
             },
@@ -972,37 +1037,6 @@ impl<'a> Context<'a> {
         } else {
             ""
         };
-
-        // If we are targeting Node.js, it doesn't have `encodeInto` yet
-        // but it does have `Buffer::write` which has similar semantics but
-        // doesn't require creating intermediate view using `subarray`
-        // and also has `Buffer::byteLength` to calculate size upfront.
-        if self.config.mode.nodejs() {
-            let get_buf = self.expose_node_buffer_memory(memory);
-            let ret = MemView {
-                name: "passStringToWasm",
-                num: get_buf.num,
-            };
-            if !self.should_write_global(ret.to_string()) {
-                return Ok(ret);
-            }
-
-            self.global(&format!(
-                "
-                    function {}(arg, malloc) {{
-                        {}
-                        const len = Buffer.byteLength(arg);
-                        const ptr = malloc(len);
-                        {}().write(arg, ptr, len);
-                        WASM_VECTOR_LEN = len;
-                        return ptr;
-                    }}
-                ",
-                ret, debug, get_buf,
-            ));
-
-            return Ok(ret);
-        }
 
         let mem = self.expose_uint8_memory(memory);
         let ret = MemView {
@@ -1273,27 +1307,36 @@ impl<'a> Context<'a> {
     }
 
     fn expose_text_processor(&mut self, s: &str, args: &str) -> Result<(), Error> {
-        if self.config.mode.nodejs() {
-            let name = self.import_name(&JsImport {
-                name: JsImportName::Module {
-                    module: "util".to_string(),
-                    name: s.to_string(),
-                },
-                fields: Vec::new(),
-            })?;
-            self.global(&format!("let cached{} = new {}{};", s, name, args));
-        } else if !self.config.mode.always_run_in_browser() {
-            self.global(&format!(
-                "
+        match &self.config.mode {
+            OutputMode::Node { .. } => {
+                let name = self.import_name(&JsImport {
+                    name: JsImportName::Module {
+                        module: "util".to_string(),
+                        name: s.to_string(),
+                    },
+                    fields: Vec::new(),
+                })?;
+                self.global(&format!("let cached{} = new {}{};", s, name, args));
+            }
+            OutputMode::Bundler {
+                browser_only: false,
+            } => {
+                self.global(&format!(
+                    "
                     const l{0} = typeof {0} === 'undefined' ? \
                         (0, module.require)('util').{0} : {0};\
                 ",
-                s
-            ));
-            self.global(&format!("let cached{0} = new l{0}{1};", s, args));
-        } else {
-            self.global(&format!("let cached{0} = new {0}{1};", s, args));
-        }
+                    s
+                ));
+                self.global(&format!("let cached{0} = new l{0}{1};", s, args));
+            }
+            OutputMode::Deno
+            | OutputMode::Web
+            | OutputMode::NoModules { .. }
+            | OutputMode::Bundler { browser_only: true } => {
+                self.global(&format!("let cached{0} = new {0}{1};", s, args))
+            }
+        };
 
         Ok(())
     }
@@ -1491,10 +1534,6 @@ impl<'a> Context<'a> {
             size = size,
         ));
         return ret;
-    }
-
-    fn expose_node_buffer_memory(&mut self, memory: MemoryId) -> MemView {
-        self.memview("getNodeBufferMemory", "Buffer.from", memory)
     }
 
     fn expose_int8_memory(&mut self, memory: MemoryId) -> MemView {
@@ -1893,6 +1932,16 @@ impl<'a> Context<'a> {
 
         let table = self.export_function_table()?;
 
+        let (register, unregister) = if self.config.weak_refs {
+            self.expose_closure_finalization()?;
+            (
+                "CLOSURE_DTORS.register(real, state, state);",
+                "CLOSURE_DTORS.unregister(state)",
+            )
+        } else {
+            ("", "")
+        };
+
         // For mutable closures they can't be invoked recursively.
         // To handle that we swap out the `this.a` pointer with zero
         // while we invoke it. If we finish and the closure wasn't
@@ -1901,7 +1950,7 @@ impl<'a> Context<'a> {
         self.global(&format!(
             "
             function makeMutClosure(arg0, arg1, dtor, f) {{
-                const state = {{ a: arg0, b: arg1, cnt: 1 }};
+                const state = {{ a: arg0, b: arg1, cnt: 1, dtor }};
                 const real = (...args) => {{
                     // First up with a closure we increment the internal reference
                     // count. This ensures that the Rust closure environment won't
@@ -1912,15 +1961,22 @@ impl<'a> Context<'a> {
                     try {{
                         return f(a, state.b, ...args);
                     }} finally {{
-                        if (--state.cnt === 0) wasm.{}.get(dtor)(a, state.b);
-                        else state.a = a;
+                        if (--state.cnt === 0) {{
+                            wasm.{table}.get(state.dtor)(a, state.b);
+                            {unregister}
+                        }} else {{
+                            state.a = a;
+                        }}
                     }}
                 }};
                 real.original = state;
+                {register}
                 return real;
             }}
             ",
-            table
+            table = table,
+            register = register,
+            unregister = unregister,
         ));
 
         Ok(())
@@ -1933,6 +1989,16 @@ impl<'a> Context<'a> {
 
         let table = self.export_function_table()?;
 
+        let (register, unregister) = if self.config.weak_refs {
+            self.expose_closure_finalization()?;
+            (
+                "CLOSURE_DTORS.register(real, state, state);",
+                "CLOSURE_DTORS.unregister(state)",
+            )
+        } else {
+            ("", "")
+        };
+
         // For shared closures they can be invoked recursively so we
         // just immediately pass through `this.a`. If we end up
         // executing the destructor, however, we clear out the
@@ -1941,7 +2007,7 @@ impl<'a> Context<'a> {
         self.global(&format!(
             "
             function makeClosure(arg0, arg1, dtor, f) {{
-                const state = {{ a: arg0, b: arg1, cnt: 1 }};
+                const state = {{ a: arg0, b: arg1, cnt: 1, dtor }};
                 const real = (...args) => {{
                     // First up with a closure we increment the internal reference
                     // count. This ensures that the Rust closure environment won't
@@ -1951,21 +2017,42 @@ impl<'a> Context<'a> {
                         return f(state.a, state.b, ...args);
                     }} finally {{
                         if (--state.cnt === 0) {{
-                            wasm.{}.get(dtor)(state.a, state.b);
+                            wasm.{table}.get(state.dtor)(state.a, state.b);
                             state.a = 0;
+                            {unregister}
                         }}
                     }}
                 }};
                 real.original = state;
+                {register}
                 return real;
             }}
+            ",
+            table = table,
+            register = register,
+            unregister = unregister,
+        ));
+
+        Ok(())
+    }
+
+    fn expose_closure_finalization(&mut self) -> Result<(), Error> {
+        if !self.should_write_global("closure_finalization") {
+            return Ok(());
+        }
+        assert!(self.config.weak_refs);
+        let table = self.export_function_table()?;
+        self.global(&format!(
+            "
+            const CLOSURE_DTORS = new FinalizationRegistry(state => {{
+                wasm.{}.get(state.dtor)(state.a, state.b)
+            }});
             ",
             table
         ));
 
         Ok(())
     }
-
     fn global(&mut self, s: &str) {
         let s = s.trim();
 
@@ -2861,11 +2948,6 @@ impl<'a> Context<'a> {
                 "false".to_string()
             }
 
-            Intrinsic::CallbackForget => {
-                assert_eq!(args.len(), 1);
-                args[0].clone()
-            }
-
             Intrinsic::NumberNew => {
                 assert_eq!(args.len(), 1);
                 args[0].clone()
@@ -3036,6 +3118,7 @@ impl<'a> Context<'a> {
                 variants.push_str(&variant_docs);
             }
             variants.push_str(&format!("{}:{},", name, value));
+            variants.push_str(&format!("\"{}\":\"{}\",", value, name));
             if enum_.generate_typescript {
                 self.typescript.push_str("\n");
                 if !variant_docs.is_empty() {
@@ -3324,7 +3407,7 @@ fn check_duplicated_getter_and_setter_names(
 fn format_doc_comments(comments: &str, js_doc_comments: Option<String>) -> String {
     let body: String = comments.lines().map(|c| format!("*{}\n", c)).collect();
     let doc = if let Some(docs) = js_doc_comments {
-        docs.lines().map(|l| format!("* {} \n", l)).collect()
+        docs.lines().map(|l| format!("* {}\n", l)).collect()
     } else {
         String::new()
     };

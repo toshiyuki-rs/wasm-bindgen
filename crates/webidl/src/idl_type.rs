@@ -547,7 +547,7 @@ impl<'a> IdlType<'a> {
             IdlType::Error => Err(TypeError::CannotConvert),
 
             IdlType::ArrayBuffer => Ok(js_sys("ArrayBuffer")),
-            IdlType::DataView => Err(TypeError::CannotConvert),
+            IdlType::DataView => Ok(js_sys("DataView")),
             IdlType::Int8Array { immutable } => Ok(Some(array("i8", pos, *immutable))),
             IdlType::Uint8Array { immutable } => Ok(Some(array("u8", pos, *immutable))),
             IdlType::Uint8ClampedArray { immutable } => {
@@ -598,10 +598,10 @@ impl<'a> IdlType<'a> {
                     None => Ok(None),
                 }
             }
-            IdlType::FrozenArray(_idl_type) => Err(TypeError::CannotConvert),
             // webidl sequences must always be returned as javascript `Array`s. They may accept
             // anything implementing the @@iterable interface.
-            IdlType::Sequence(_idl_type) => match pos {
+            // The same implementation is fine for `FrozenArray`
+            IdlType::FrozenArray(_idl_type) | IdlType::Sequence(_idl_type) => match pos {
                 TypePosition::Argument => Ok(js_value),
                 TypePosition::Return => Ok(js_sys("Array")),
             },
