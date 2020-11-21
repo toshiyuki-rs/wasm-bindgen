@@ -1332,6 +1332,7 @@ impl<'a> Context<'a> {
             }
             OutputMode::Deno
             | OutputMode::Web
+            | OutputMode::WebBundler
             | OutputMode::NoModules { .. }
             | OutputMode::Bundler { browser_only: true } => {
                 self.global(&format!("let cached{0} = new {0}{1};", s, args))
